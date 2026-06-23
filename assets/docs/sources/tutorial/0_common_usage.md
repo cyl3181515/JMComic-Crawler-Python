@@ -29,7 +29,7 @@ from jmcomic import *
 # 1. 在调用下载api前，通过创建和使用option对象，可以定制化下载行为。
 # 推荐使用配置文件的方式来创建option对象，
 # 你可以配置很多东西，比如代理、cookies、下载规则等等。
-# 配置文件的语法参考: https://jmcomic.readthedocs.io/en/latest/option_file_syntax/
+# 配置文件的语法参考: https://jmcomic.readthedocs.io/zh-cn/latest/option_file_syntax/
 option = create_option_by_file('op.yml')  # 通过配置文件来创建option对象
 
 # 2. 调用下载api，把option作为参数传递 
@@ -38,7 +38,7 @@ download_album(123, option)
 option.download_album(123)
 ```
 
-## 获取本子/章节/图片的实体类
+## 获取本子/章节/图片的实体类，下载图片/封面图
 
 ```python
 from jmcomic import *
@@ -49,15 +49,25 @@ client = JmOption.default().new_jm_client()
 # 本子实体类
 album: JmAlbumDetail = client.get_album_detail('427413')
 
+# 下载本子封面图，保存为 cover.png （图片后缀可指定为jpg、webp等）
+client.download_album_cover('427413', './cover.png')
+
 
 def fetch(photo: JmPhotoDetail):
     # 章节实体类
     photo = client.get_photo_detail(photo.photo_id, False)
+    print(f'章节id: {photo.photo_id}')
 
     # 图片实体类
     image: JmImageDetail
     for image in photo:
-        print(image.img_url)
+        print(f'图片url: {image.img_url}')
+
+    # 下载单个图片
+    client.download_by_image_detail(image, './a.jpg')
+    # 如果是已知未混淆的图片，也可以直接使用url来下载
+    random_image_domain = JmModuleConfig.DOMAIN_IMAGE_LIST[0]
+    client.download_image(f'https://{random_image_domain}/media/albums/416130.jpg', './a.jpg')
 
 
 # 多线程发起请求
@@ -66,6 +76,49 @@ multi_thread_launcher(
     apply_each_obj_func=fetch
 )
 ```
+
+## jmcomic异常处理示例
+
+```python
+from jmcomic import *
+
+# 客户端
+client = JmOption.default().new_jm_client()
+
+# 捕获获取本子/章节详情时可能出现的异常
+try:
+    # 请求本子实体类
+    album: JmAlbumDetail = client.get_album_detail('427413')
+except MissingAlbumPhotoException as e:
+    print(f'id={e.error_jmid}的本子不存在')
+
+except JsonResolveFailException as e:
+    print(f'解析json失败')
+    # 响应对象
+    resp = e.resp
+    print(f'resp.text: {resp.text}, resp.status_code: {resp.status_code}')
+
+except RequestRetryAllFailException as e:
+    print(f'请求失败，重试次数耗尽')
+
+except JmcomicException as e:
+    # 捕获所有异常，用作兜底
+    print(f'jmcomic遇到异常: {e}')
+
+# 多线程下载时，可能出现非当前线程下载失败，抛出异常，
+# 而JmDownloader有对应字段记录了这些线程发生的异常
+# 使用check_exception=True参数可以使downloader主动检查是否存在下载异常
+# 如果有，则当前线程会主动上抛一个PartialDownloadFailedException异常
+# 该参数主要用于主动检查部分下载失败的情况，
+# 因为非当前线程抛出的异常（比如下载章节的线程和下载图片的线程），这些线程如果抛出异常，
+# 当前线程是感知不到的，try-catch下载方法download_album不能捕获到其他线程发生的异常。
+try:
+    album, downloader = download_album(123, check_exception=True)
+except PartialDownloadFailedException as e:
+    downloader: JmDownloader = e.downloader
+    print(f'下载出现部分失败, 下载失败的章节: {downloader.download_failed_photo}, 下载失败的图片: {downloader.download_failed_image}')
+```
+
 
 ## 搜索本子
 
@@ -76,6 +129,8 @@ client = JmOption.default().new_jm_client()
 
 # 分页查询，search_site就是禁漫网页上的【站内搜索】
 page: JmSearchPage = client.search_site(search_query='+MANA +无修正', page=1)
+print(f'结果总数: {page.total}, 分页大小: {page.page_size}，页数: {page.page_count}')
+
 # page默认的迭代方式是page.iter_id_title()，每次迭代返回 albun_id, title
 for album_id, title in page:
     print(f'[{album_id}]: {title}')
@@ -109,6 +164,35 @@ for aid, atitle, tag_list in page.iter_id_title_tag():  # 使用page的iter_id_t
 download_album(aid_list, option)
 ```
 
+## 获取收藏夹
+
+可参考discussions: https://github.com/hect0x7/JMComic-Crawler-Python/discussions/235
+
+```python
+from jmcomic import *
+
+option = JmOption.default()
+client = option.new_jm_client()
+client.login('用户名', '密码')  # 也可以使用login插件/配置cookies
+
+# 遍历全部收藏的所有页
+for page in client.favorite_folder_gen():  # 如果你只想获取特定收藏夹，需要添加folder_id参数
+    # 遍历每页结果
+    for aid, atitle in page.iter_id_title():
+        # aid: 本子的album_id
+        # atitle: 本子的名称
+        print(aid)
+    # 打印当前帐号的所有收藏夹信息
+    for folder_id, folder_name in page.iter_folder_id_name():
+        print(f'收藏夹id: {folder_id}, 收藏夹名称: {folder_name}')
+
+# 获取特定收藏夹的单页，使用favorite_folder方法
+page = client.favorite_folder(page=1,
+                              order_by=JmMagicConstants.ORDER_BY_LATEST,
+                              folder_id='0'  # 收藏夹id
+                              )
+```
+
 ## 分类 / 排行榜
 
 禁漫的分类是一个和搜索有些类似的功能。
@@ -135,7 +219,7 @@ page: JmCategoryPage = cl.categories_filter(
     page=1,
     time=JmMagicConstants.TIME_ALL,  # 时间选择全部，具体可以写什么请见JmMagicConstants
     category=JmMagicConstants.CATEGORY_ALL,  # 分类选择全部，具体可以写什么请见JmMagicConstants
-    order_by=JmMagicConstants.ORDER_BY_LATEST,  # 按照观看数排序，具体可以写什么请见JmMagicConstants
+    order_by=JmMagicConstants.ORDER_BY_VIEW,  # 按照观看数排序，具体可以写什么请见JmMagicConstants
 )
 
 # 月排行，底层实现也是调的categories_filter
@@ -144,6 +228,7 @@ page: JmCategoryPage = cl.month_ranking(1)
 page: JmCategoryPage = cl.week_ranking(1)
 
 # 循环获取分页，使用 cl.categories_filter_gen
+# 基础用法：简单的 for 循环
 for page in cl.categories_filter_gen(page=1, # 起始页码
                                      # 下面是分类参数
                                      time=JmMagicConstants.TIME_WEEK,
@@ -152,6 +237,22 @@ for page in cl.categories_filter_gen(page=1, # 起始页码
                                      ):
     for aid, atitle in page:
         print(aid, atitle)
+
+# 高级用法：使用 generator 的 send() 方法在遍历中途动态修改查询条件
+# 注意：必须用 while 循环手动接收 send() 的返回值，避免在 for 循环内调用 send() 跳过分页
+generator = cl.categories_filter_gen(page=1, time=JmMagicConstants.TIME_WEEK)
+try:
+    page = next(generator)  # 预先启动生成器
+    while True:
+        # 打印第一页
+        for aid, atitle in page:
+            print(aid, atitle)
+        
+        # 假设我们只想看前一页，下一页想换一个排序方式
+        # 调用 send 传入包含新参数的 dict 即可覆盖原来的查询条件
+        page = generator.send({"order_by": JmMagicConstants.ORDER_BY_LATEST})
+except StopIteration:
+    pass
 
 ```
 
@@ -197,6 +298,19 @@ for page in html_cl.search_gen(search_query='mana',
     # 打印page内容
     for aid, atitle in page.iter_id_title():
         print(aid, atitle)
+
+# 高级用法：使用 generator 的 send() 方法进行手动翻页或修改查询条件
+generator = html_cl.search_gen('mana')
+try:
+    page = next(generator)
+    while True:
+        for aid, atitle in page.iter_id_title():
+            print(aid, atitle)
+        
+        # 可直接动态传参改变搜索条件，例如下一页换成搜索 'nana'
+        page = generator.send({"search_query": 'nana'})
+except StopIteration:
+    pass
 ```
 
 

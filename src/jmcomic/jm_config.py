@@ -1,9 +1,40 @@
-from common import time_stamp, str_to_list, field_cache, ProxyBuilder
+from __future__ import annotations
+
+import logging
+from common import time_stamp, field_cache, ProxyBuilder
+
+jm_logger = logging.getLogger('jmcomic')
 
 
-def default_jm_logging(topic: str, msg: str):
-    from common import format_ts, current_thread
-    print('[{}] [{}]:【{}】{}'.format(format_ts(), current_thread().name, topic, msg))
+def shuffled(lines):
+    from random import shuffle
+    from common import str_to_list
+    ls = str_to_list(lines)
+    shuffle(ls)
+    return ls
+
+
+def setup_default_jm_logger():
+    # 为了保持原有默认向下兼容，如果没有 handler，我们加一个控制台 handler
+    if not jm_logger.handlers:
+        import sys
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('[%(asctime)s] [%(threadName)s]:【%(topic)s】%(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        handler.setFormatter(formatter)
+        jm_logger.addHandler(handler)
+        jm_logger.setLevel(logging.INFO)
+
+
+def default_jm_logging(topic: str, msg, e: BaseException | None = None):
+    # 支持 jm_log('topic', e) 的简写
+    if isinstance(msg, BaseException):
+        e = msg
+        msg = str(msg)
+    extra = {'topic': topic}
+    if e is not None:
+        jm_logger.error(msg, extra=extra, exc_info=e)
+    else:
+        jm_logger.info(msg, extra=extra)
 
 
 # 禁漫常量
@@ -13,6 +44,9 @@ class JmMagicConstants:
     ORDER_BY_VIEW = 'mv'
     ORDER_BY_PICTURE = 'mp'
     ORDER_BY_LIKE = 'tf'
+    # 下面这两个目前只在网页上看到，app上没有
+    ORDER_BY_SCORE = 'tr'
+    ORDER_BY_COMMENT = 'md'
 
     ORDER_MONTH_RANKING = 'mv_m'
     ORDER_WEEK_RANKING = 'mv_w'
@@ -59,27 +93,93 @@ class JmMagicConstants:
     SUB_SINGLE_JAPANESE = SUB_JAPANESE
     SUB_SINGLE_YOUTH = 'youth'
 
-    # 分页大小
-    PAGE_SIZE_SEARCH = 80
-    PAGE_SIZE_FAVORITE = 20
-
     # 图片分割参数
     SCRAMBLE_220980 = 220980
     SCRAMBLE_268850 = 268850
     SCRAMBLE_421926 = 421926  # 2023-02-08后改了图片切割算法
 
+    # 移动端API密钥
+    APP_TOKEN_SECRET = '185Hcomic3PAPP7R'
+    APP_TOKEN_SECRET_2 = '18comicAPPContent'
+    APP_DATA_SECRET = '185Hcomic3PAPP7R'
+    API_DOMAIN_SERVER_SECRET = 'diosfjckwpqpdfjkvnqQjsik'
+    APP_VERSION = '2.0.26'
+
+
+# 模块级别共用配置
+class JmModuleConfig:
+    # 网站相关
+    PROT = "https://"
+    JM_REDIRECT_URL = f'{PROT}jm365.work/3YeBdF'  # 永久網域，怕走失的小伙伴收藏起来
+    JM_PUB_URL = f'{PROT}jmcomicgo.org'
+    JM_CDN_IMAGE_URL_TEMPLATE = PROT + 'cdn-msp.{domain}/media/photos/{photo_id}/{index:05}{suffix}'  # index 从1开始
+    JM_IMAGE_SUFFIX = ['.jpg', '.webp', '.png', '.gif']
+
+    # JM的异常网页内容
+    JM_ERROR_RESPONSE_TEXT = {
+        "Could not connect to mysql! Please check your database settings!": "禁漫服务器内部报错",
+        "Restricted Access!": "禁漫拒绝你所在ip地区的访问，你可以选择: 换域名/换代理",
+    }
+
+    # JM的异常网页code
+    JM_ERROR_STATUS_CODE = {
+        403: 'ip地区禁止访问/爬虫被识别',
+        500: '500: 禁漫服务器内部异常（可能是服务器过载，可以切换ip或稍后重试）',
+        520: '520: Web server is returning an unknown error (禁漫服务器内部报错)',
+        524: '524: The origin web server timed out responding to this request. (禁漫服务器处理超时)',
+    }
+
+    # 分页大小
+    PAGE_SIZE_SEARCH = 80
+    PAGE_SIZE_FAVORITE = 20
+
+    # 图片分隔相关
+    SCRAMBLE_CACHE = {}
+
     # 当本子没有作者名字时，顶替作者名字
     DEFAULT_AUTHOR = 'default_author'
 
-    # 移动端API密钥
-    APP_TOKEN_SECRET = '18comicAPP'
-    APP_TOKEN_SECRET_2 = '18comicAPPContent'
-    APP_DATA_SECRET = '185Hcomic3PAPP7R'
-    APP_VERSION = '1.7.0'
+    # cookies，目前只在移动端使用，因为移动端请求接口须携带，但不会校验cookies的内容。
+    APP_COOKIES = None
+
+    # 移动端图片域名
+    DOMAIN_IMAGE_LIST = shuffled('''
+    cdn-msp.jmapiproxy1.cc
+    cdn-msp.jmapiproxy2.cc
+    cdn-msp2.jmapiproxy2.cc
+    cdn-msp3.jmapiproxy2.cc
+    cdn-msp.jmapinodeudzn.net
+    cdn-msp3.jmapinodeudzn.net
+    ''')
+
+    # 移动端API域名
+    DOMAIN_API_LIST = shuffled('''
+    www.cdnaspa.club
+    www.cdnaspa.vip
+    www.cdnplaystation6.cc
+    www.cdnplaystation6.vip
+    ''')
+
+    DOMAIN_API_UPDATED_LIST = None
+
+    # 获取最新移动端API域名的地址
+    API_URL_DOMAIN_SERVER_LIST = shuffled('''
+    https://rup4a04-c01.tos-ap-southeast-1.bytepluses.com/newsvr-2025.txt
+    https://rup4a04-c02.tos-cn-hongkong.bytepluses.com/newsvr-2025.txt
+    https://rup4a04-c03.tos-cn-beijing.bytepluses.com.cn/newsvr-2025.txt
+    ''')
+
     APP_HEADERS_TEMPLATE = {
-        'Accept-Encoding': 'gzip',
+        'Accept-Encoding': 'gzip, deflate',
         'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, '
                       'like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
+    }
+
+    APP_HEADERS_IMAGE = {
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'X-Requested-With': 'com.JMComic3.app',
+        'Referer': PROT + DOMAIN_API_LIST[0],
+        'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
     }
 
     # 网页端headers
@@ -104,53 +204,6 @@ class JmMagicConstants:
                       'Safari/537.36',
     }
 
-
-# 模块级别共用配置
-class JmModuleConfig:
-    # 网站相关
-    PROT = "https://"
-    JM_REDIRECT_URL = f'{PROT}jm365.work/3YeBdF'  # 永久網域，怕走失的小伙伴收藏起来
-    JM_PUB_URL = f'{PROT}jmcomic-fb.vip'
-    JM_CDN_IMAGE_URL_TEMPLATE = PROT + 'cdn-msp.{domain}/media/photos/{photo_id}/{index:05}{suffix}'  # index 从1开始
-    JM_IMAGE_SUFFIX = ['.jpg', '.webp', '.png', '.gif']
-
-    # JM的异常网页内容
-    JM_ERROR_RESPONSE_TEXT = {
-        "Could not connect to mysql! Please check your database settings!": "禁漫服务器内部报错",
-        "Restricted Access!": "禁漫拒绝你所在ip地区的访问，你可以选择: 换域名/换代理",
-    }
-
-    # JM的异常网页code
-    JM_ERROR_STATUS_CODE = {
-        403: 'ip地区禁止访问/爬虫被识别',
-        520: '520: Web server is returning an unknown error (禁漫服务器内部报错)',
-        524: '524: The origin web server timed out responding to this request. (禁漫服务器处理超时)',
-    }
-
-    # 图片分隔相关
-    SCRAMBLE_CACHE = {}
-
-    # cookies，目前只在移动端使用，因为移动端请求接口须携带，但不会校验cookies的内容。
-    APP_COOKIES = None
-
-    # 移动端图片域名
-    DOMAIN_IMAGE_LIST = str_to_list('''
-    cdn-msp.jmapinodeudzn.net
-    cdn-msp2.jmapinodeudzn.net
-    cdn-msp2.jmapiproxy3.cc
-    cdn-msp3.jmapinodeudzn.net
-
-    ''')
-
-    # 移动端API域名
-    DOMAIN_API_LIST = str_to_list('''
-    www.jmapinodeudzn.xyz
-    www.cdn-eldenringproxy.xyz
-    www.cdn-eldenringproxy.me
-    www.cdn-eldenringproxy.vip
-    www.jmapinode.xyz
-    ''')
-
     # 网页端域名配置
     # 无需配置，默认为None，需要的时候会发起请求获得
     # 使用优先级:
@@ -168,6 +221,8 @@ class JmModuleConfig:
 
     # 客户端注册表
     REGISTRY_CLIENT = {}
+    # 异步客户端注册表（对应 REGISTRY_CLIENT，由 AsyncJmcomicClient 子类注册）
+    REGISTRY_ASYNC_CLIENT = {}
     # 插件注册表
     REGISTRY_PLUGIN = {}
     # 异常监听器
@@ -183,12 +238,17 @@ class JmModuleConfig:
     FLAG_USE_FIX_TIMESTAMP = True
     # 移动端Client初始化cookies
     FLAG_API_CLIENT_REQUIRE_COOKIES = True
+    # 自动更新禁漫API域名
+    FLAG_API_CLIENT_AUTO_UPDATE_DOMAIN = True
     # log开关标记
     FLAG_ENABLE_JM_LOG = True
     # log时解码url
     FLAG_DECODE_URL_WHEN_LOGGING = True
     # 当内置的版本号落后时，使用最新的禁漫app版本号
     FLAG_USE_VERSION_NEWER_IF_BEHIND = True
+    # 当正则匹配异常时，将响应文本持久化到文件，方便debug定位解析失败原因
+    # 文件会保存在当前工作目录下的 jmcomic_debug/ 中，路径会打印在异常信息中
+    FLAG_DUMP_HTML_ON_REGEX_ERROR = False
 
     # 关联dir_rule的自定义字段与对应的处理函数
     # 例如:
@@ -248,6 +308,18 @@ class JmModuleConfig:
         if clazz is None:
             from .jm_toolkit import ExceptionTool
             ExceptionTool.raises(f'not found client impl class for key: "{client_key}"')
+
+        return clazz
+
+    @classmethod
+    def async_client_impl_class(cls, client_key: str):
+        """异步客户端类查找，对应 client_impl_class"""
+        clazz_dict = cls.REGISTRY_ASYNC_CLIENT
+
+        clazz = clazz_dict.get(client_key, None)
+        if clazz is None:
+            from .jm_toolkit import ExceptionTool
+            ExceptionTool.raises(f'not found async client impl class for key: "{client_key}"')
 
         return clazz
 
@@ -335,7 +407,7 @@ class JmModuleConfig:
         """
         网页端的headers
         """
-        headers = JmMagicConstants.HTML_HEADERS_TEMPLATE.copy()
+        headers = cls.HTML_HEADERS_TEMPLATE.copy()
         headers.update({
             'authority': domain,
             'origin': f'https://{domain}',
@@ -351,11 +423,29 @@ class JmModuleConfig:
         token, tokenparam = JmCryptoTool.token_and_tokenparam(ts)
         return ts, token, tokenparam
 
-    # noinspection PyUnusedLocal
     @classmethod
-    def jm_log(cls, topic: str, msg: str):
-        if cls.FLAG_ENABLE_JM_LOG is True:
-            cls.EXECUTOR_LOG(topic, msg)
+    def jm_log(cls, topic: str, msg, e: BaseException | None = None):
+        if cls.FLAG_ENABLE_JM_LOG:
+            executor = cls.EXECUTOR_LOG
+            if e is None:
+                executor(topic, msg)
+            else:
+                import inspect
+                try:
+                    sig = inspect.signature(executor)
+                    params_count = len(sig.parameters)
+                except (ValueError, TypeError):
+                    params_count = 2
+
+                if params_count >= 3:
+                    executor(topic, msg, e)
+                else:
+                    import warnings
+                    warnings.warn(
+                        'jmcomic已升级到标准logging，建议将EXECUTOR_LOG重新定义为3个参数以接收异常对象 (topic, msg, e)',
+                        stacklevel=2
+                    )
+                    executor(topic, msg)
 
     @classmethod
     def disable_jm_log(cls):
@@ -363,13 +453,13 @@ class JmModuleConfig:
 
     @classmethod
     def new_postman(cls, session=False, **kwargs):
-        kwargs.setdefault('impersonate', 'chrome110')
+        kwargs.setdefault('impersonate', 'chrome')
         kwargs.setdefault('headers', JmModuleConfig.new_html_headers())
         kwargs.setdefault('proxies', JmModuleConfig.DEFAULT_PROXIES)
 
         from common import Postmans
 
-        if session is True:
+        if session:
             return Postmans.new_session(**kwargs)
 
         return Postmans.new_postman(**kwargs)
@@ -384,7 +474,7 @@ class JmModuleConfig:
 
     DEFAULT_OPTION_DICT: dict = {
         'log': None,
-        'dir_rule': {'rule': 'Bd_Pname', 'base_dir': None},
+        'dir_rule': {'rule': 'Bd_Pname', 'base_dir': None, 'normalize_zh': None},
         'download': {
             'cache': True,
             'image': {'decode': True, 'suffix': None},
@@ -397,14 +487,15 @@ class JmModuleConfig:
             'cache': None,  # see CacheRegistry
             'domain': [],
             'postman': {
-                'type': 'cffi',
+                'type': 'curl_cffi',
                 'meta_data': {
-                    'impersonate': 'chrome110',
+                    'impersonate': 'chrome',
                     'headers': None,
                     'proxies': None,
                 }
             },
             'impl': None,
+            'async_impl': 'async_api',  # 异步客户端实现类型
             'retry_times': 5,
         },
         'plugins': {
@@ -472,9 +563,75 @@ class JmModuleConfig:
         cls.REGISTRY_CLIENT[client_class.client_key] = client_class
 
     @classmethod
+    def register_async_client(cls, client_class):
+        """注册异步客户端类，对标 register_client"""
+        from .jm_toolkit import ExceptionTool
+        ExceptionTool.require_true(getattr(client_class, 'client_key', None) is not None,
+                                   f'未配置client_key, class: {client_class}')
+        cls.REGISTRY_ASYNC_CLIENT[client_class.client_key] = client_class
+
+    @classmethod
     def register_exception_listener(cls, etype, listener):
         cls.REGISTRY_EXCEPTION_LISTENER[etype] = listener
 
 
+setup_default_jm_logger()
+
 jm_log = JmModuleConfig.jm_log
 disable_jm_log = JmModuleConfig.disable_jm_log
+
+
+class PrettyFormatter(logging.Formatter):
+    """带 ANSI 颜色的日志格式化器，按 topic 前缀分配颜色"""
+
+    TOPIC_COLORS = {
+        'album': '\033[1;36m',  # 青色加粗 — 本子级别
+        'photo': '\033[36m',  # 青色 — 章节级别
+        'image': '\033[2;37m',  # 暗灰 — 图片级别（弱化）
+        'plugin': '\033[35m',  # 紫色 — 插件
+        'req': '\033[33m',  # 黄色 — 网络请求
+        'api': '\033[34m',  # 蓝色 — API
+    }
+    ERROR_COLOR = '\033[1;31m'  # 红色加粗
+    WARN_COLOR = '\033[33m'  # 黄色
+    RESET = '\033[0m'
+
+    def __init__(self):
+        super().__init__(fmt='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
+
+    def format(self, record):
+        topic = getattr(record, 'topic', '')
+        if record.levelno >= logging.ERROR:
+            color = self.ERROR_COLOR
+        elif record.levelno >= logging.WARNING:
+            color = self.WARN_COLOR
+        else:
+            # 按 topic 前缀匹配颜色
+            color = next(
+                (c for prefix, c in self.TOPIC_COLORS.items()
+                 if topic.startswith(prefix)),
+                ''
+            )
+        formatted = super().format(record)
+        return f'{color}{formatted}{self.RESET}' if color else formatted
+
+
+# noinspection PyUnresolvedReferences
+def enable_pretty_log():
+    """开启带颜色的美化日志"""
+    import sys
+
+    # Windows 需要启用 VT100 ANSI 支持
+    if sys.platform == 'win32':
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+
+    jm_logger.handlers.clear()
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(PrettyFormatter())
+    jm_logger.addHandler(handler)
+    jm_logger.setLevel(logging.INFO)

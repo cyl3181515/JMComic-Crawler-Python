@@ -6,7 +6,7 @@ from .jm_exception import *
 class JmcomicText:
     pattern_jm_domain = compile(r'https://([\w.-]+)')
     pattern_jm_pa_id = [
-        (compile(r'(photos?|album)/(\d+)'), 2),
+        (compile(r'(photos?|albums?)/(\d+)'), 2),
         (compile(r'id=(\d+)'), 1),
     ]
     pattern_html_jm_pub_domain = compile(r'[\w-]+\.\w+/?\w+')
@@ -22,44 +22,47 @@ class JmcomicText:
     pattern_html_photo_sort = compile(r'var sort = (\d+);')
     pattern_html_photo_page_arr = compile(r'var page_arr = (.*?);')
 
+    pattern_html_b64_decode_content = compile(r'const html = base64DecodeUtf8\("(.*?)"\)')
     pattern_html_album_album_id = compile(r'<span class="number">.*?：JM(\d+)</span>')
     pattern_html_album_scramble_id = compile(r'var scramble_id = (\d+);')
-    pattern_html_album_name = compile(r'<h1 class="book-name" id="book-name">([\s\S]*?)</h1>')
-    pattern_html_album_episode_list = compile(r'data-album="(\d+)">\n *?<li.*?>\n *'
-                                              r'第(\d+)話\n([\s\S]*?)\n *'
-                                              r'<[\s\S]*?>(\d+-\d+-\d+).*?')
+    pattern_html_album_name = compile(r'id="book-name"[^>]*?>([\s\S]*?)<')
+    pattern_html_album_description = compile(r'[叙|敘]述：([\s\S]*?)</h2>')
+    pattern_html_album_episode_list = compile(r'data-album="(\d+)"[^>]*>[\s\S]*?第(\d+)[话話]([\s\S]*?)<[\s\S]*?>')
     pattern_html_album_page_count = compile(r'<span class="pagecount">.*?:(\d+)</span>')
     pattern_html_album_pub_date = compile(r'>上架日期 : (.*?)</span>')
     pattern_html_album_update_date = compile(r'>更新日期 : (.*?)</span>')
+    pattern_html_tag_a = compile(r'<a[^>]*?>\s*(\S*)\s*</a>')
     # 作品
     pattern_html_album_works = [
         compile(r'<span itemprop="author" data-type="works">([\s\S]*?)</span>'),
-        compile(r'<a[^>]*?>(.*?)</a>')
+        pattern_html_tag_a,
     ]
     # 登場人物
     pattern_html_album_actors = [
         compile(r'<span itemprop="author" data-type="actor">([\s\S]*?)</span>'),
-        compile(r'<a[^>]*?>(.*?)</a>')
+        pattern_html_tag_a,
     ]
     # 标签
     pattern_html_album_tags = [
         compile(r'<span itemprop="genre" data-type="tags">([\s\S]*?)</span>'),
-        compile(r'<a[^>]*?>(.*?)</a>')
+        pattern_html_tag_a,
     ]
     # 作者
     pattern_html_album_authors = [
-        compile(r'作者： *<span itemprop="author" data-type="author">([\s\S]*?)</span>'),
-        compile(r"<a[^>]*?>(.*?)</a>"),
+        compile(r'<span itemprop="author" data-type="author">([\s\S]*?)</span>'),
+        pattern_html_tag_a,
     ]
     # 點擊喜歡
     pattern_html_album_likes = compile(r'<span id="albim_likes_\d+">(.*?)</span>')
     # 觀看
-    pattern_html_album_views = compile(r'<span>(.*?)</span>\n *<span>(次觀看|观看次数)</span>')
+    pattern_html_album_views = compile(r'<span>(.*?)</span>\n *<span>(次觀看|观看次数|次观看次数)</span>')
     # 評論(div)
     pattern_html_album_comment_count = compile(r'<div class="badge"[^>]*?id="total_video_comments">(\d+)</div>'), 0
 
     # 提取接口返回值信息
     pattern_ajax_favorite_msg = compile(r'</button>(.*?)</div>')
+    # 提取api接口返回值里的json，防止返回值里有无关日志导致json解析报错
+    pattern_api_response_json_object = compile(r'\{[\s\S]*?}')
 
     @classmethod
     def parse_to_jm_domain(cls, text: str):
@@ -108,6 +111,15 @@ class JmcomicText:
         ))
 
     @classmethod
+    def parse_jm_base64_html(cls, resp_text: str) -> str:
+        from base64 import b64decode
+        html_b64 = PatternTool.match_or_default(resp_text, cls.pattern_html_b64_decode_content, None)
+        if html_b64 is None:
+            return resp_text
+        html = b64decode(html_b64).decode()
+        return html
+
+    @classmethod
     def analyse_jm_photo_html(cls, html: str) -> JmPhotoDetail:
         return cls.reflect_new_instance(
             html,
@@ -118,7 +130,7 @@ class JmcomicText:
     @classmethod
     def analyse_jm_album_html(cls, html: str) -> JmAlbumDetail:
         return cls.reflect_new_instance(
-            html,
+            cls.parse_jm_base64_html(html),
             "pattern_html_album_",
             JmModuleConfig.album_class()
         )
@@ -168,10 +180,11 @@ class JmcomicText:
 
             if field_value is None:
                 if default is None:
+                    msg_tail = '' if JmModuleConfig.FLAG_DUMP_HTML_ON_REGEX_ERROR else '，可通过设置 JmModuleConfig.FLAG_DUMP_HTML_ON_REGEX_ERROR = True 将响应文本保存到文件'
                     ExceptionTool.raises_regex(
                         f"文本没有匹配上字段：字段名为'{field_name}'，pattern: [{pattern}]"
                         + (f"\n响应文本=[{html}]" if len(html) < 200 else
-                           f'响应文本过长(len={len(html)})，不打印'
+                           f'响应文本过长(len={len(html)})，不打印{msg_tail}'
                            ),
                         html=html,
                         pattern=pattern,
@@ -299,7 +312,11 @@ class JmcomicText:
                 add()
                 # 定位右括号
                 j = find_right_pair(c, i)
-                ExceptionTool.require_true(j != -1, f'未闭合的 {c}{bracket_map[c]}: {title[i:]}')
+                if j == -1:
+                    # 括号未闭合
+                    char_list.append(c)
+                    i += 1
+                    continue
                 # 整个括号的单词结束
                 add(title[i:j])
                 # 移动指针
@@ -313,8 +330,107 @@ class JmcomicText:
 
     @classmethod
     def to_zh_cn(cls, s):
-        import zhconv
-        return zhconv.convert(s, 'zh_cn')
+        # 兼容旧接口，默认转换为简体
+        return cls.to_zh(s, 'zh-cn')
+
+    @classmethod
+    def to_zh(cls, s, target=None):
+        """
+        通用的繁简体转换接口。
+
+        :param s: 待转换字符串
+        :param target: 目标编码: 'zh-cn'（简体）, 'zh-tw'（繁体），或 None 表示不转换
+        :return: 转换后的字符串（若转换失败或未安装 zhconv，返回原始字符串）
+        """
+        if s is None:
+            return s
+
+        if not target:
+            return s
+
+        try:
+            import zhconv
+            return zhconv.convert(s, target)
+        except ImportError:
+            jm_log('zhconv.error', '繁简转换失败，未安装zhconv，请先使用命令安装: [pip install zhconv]')
+            return s
+        except Exception as e:
+            # 如果 zhconv 不可用或转换失败，则回退原字符串
+            jm_log('zhconv.error', f'error: [{e}], s: [{s}]')
+            return s
+
+    @classmethod
+    def try_mkdir(cls, save_dir: str):
+        try:
+            mkdir_if_not_exists(save_dir)
+        except OSError as e:
+            if e.errno == 36:
+                # 目录名过长
+                limit = JmModuleConfig.VAR_FILE_NAME_LENGTH_LIMIT
+                jm_log('error', f'目录名过长，无法创建目录，强制缩短到{limit}个字符并重试')
+                save_dir = save_dir[0:limit]
+                return cls.try_mkdir(save_dir)
+            raise e
+        return save_dir
+
+    # noinspection PyTypeChecker
+    @classmethod
+    def try_parse_json_object(cls, resp_text: str) -> dict:
+        import json
+        text = resp_text.strip()
+        if text.startswith('{') and text.endswith('}'):
+            # fast case
+            return json.loads(text)
+
+        for match in cls.pattern_api_response_json_object.finditer(text):
+            try:
+                return json.loads(match.group(0))
+            except Exception as e:
+                jm_log('parse_json_object.error', e)
+
+        raise AssertionError(f'未解析出json数据: {cls.limit_text(resp_text, 200)}')
+
+    @classmethod
+    def limit_text(cls, text: str, limit: int) -> str:
+        length = len(text)
+        return text if length <= limit else (text[:limit] + f'...({length - limit}')
+
+    @classmethod
+    def get_album_cover_url(cls,
+                            album_id: Union[str, int],
+                            image_domain: Optional[str] = None,
+                            size: str = '',
+                            ) -> str:
+        """
+        根据本子id生成封面url
+
+        :param album_id: 本子id
+        :param image_domain: 图片cdn域名（可传入裸域或含协议的域名）
+        :param size: 尺寸后缀，例如搜索列表页会使用 size="_3x4" 的封面图
+        """
+        if image_domain is None:
+            import random
+            image_domain = random.choice(JmModuleConfig.DOMAIN_IMAGE_LIST)
+
+        path = f'/media/albums/{cls.parse_to_jm_id(album_id)}{size}.jpg'
+        return cls.format_url(path, image_domain)
+
+    @classmethod
+    def compare_versions(cls, v1: str, v2: str) -> int:
+        parts1 = list(map(int, v1.split(".")))
+        parts2 = list(map(int, v2.split(".")))
+
+        # 补齐长度
+        length = max(len(parts1), len(parts2))
+        parts1 += [0] * (length - len(parts1))
+        parts2 += [0] * (length - len(parts2))
+
+        if parts1 > parts2:
+            return 1  # v1 大
+        elif parts1 < parts2:
+            return -1  # v2 大
+        else:
+            return 0  # 相等
 
 
 # 支持dsl: #{???} -> os.getenv(???)
@@ -381,7 +497,7 @@ class JmPageTool:
     # 收藏页面的本子结果
     pattern_html_favorite_content = compile(
         r'<div id="favorites_album_[^>]*?>[\s\S]*?'
-        r'<a href="/album/(\d+)/">[\s\S]*?'
+        r'<a href="/album/(\d+)/[^"]*">[\s\S]*?'
         r'<div class="video-title title-truncate">([^<]*?)'
         r'</div>'
     )
@@ -422,10 +538,7 @@ class JmPageTool:
             # 这里不作解析，因为没什么用...
             tags = cls.pattern_html_search_tags.findall(tag_text)
             content.append((
-                album_id, {
-                    'name': title,  # 改成name是为了兼容 parse_api_resp_to_page
-                    'tags': tags
-                }
+                album_id, dict(name=title, tags=tags)  # 改成name是为了兼容 parse_api_resp_to_page
             ))
 
         return JmSearchPage(content, total)
@@ -440,10 +553,7 @@ class JmPageTool:
         for (album_id, title, tag_text) in album_info_list:
             tags = cls.pattern_html_search_tags.findall(tag_text)
             content.append((
-                album_id, {
-                    'name': title,  # 改成name是为了兼容 parse_api_resp_to_page
-                    'tags': tags
-                }
+                album_id, dict(name=title, tags=tags)  # 改成name是为了兼容 parse_api_resp_to_page
             ))
 
         return JmSearchPage(content, total)
@@ -624,6 +734,7 @@ class JmApiAdaptTool:
             'actors',
             'related_list',
             'name',
+            'description',
             ('id', 'album_id'),
             ('author', 'authors'),
             ('total_views', 'views'),
@@ -676,7 +787,7 @@ class JmApiAdaptTool:
             chapter = AdvancedDict(chapter)
             # photo_id, photo_index, photo_title, photo_pub_date
             episode_list.append(
-                (chapter.id, chapter.sort, chapter.name, None)
+                (chapter.id, chapter.sort, chapter.name)
             )
         fields['episode_list'] = episode_list
         for it in 'scramble_id', 'page_count', 'pub_date', 'update_date':

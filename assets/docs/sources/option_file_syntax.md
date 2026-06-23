@@ -15,7 +15,7 @@ JmOption.default().to_file('./option.yml') # 创建默认option，导出为optio
 
 ```yaml
 # 开启jmcomic的日志输出，默认为true
-# 对日志有需求的可进一步参考文档 → https://jmcomic.readthedocs.io/en/latest/tutorial/11_log_custom/
+# 对日志有需求的可进一步参考文档 → https://jmcomic.readthedocs.io/zh-cn/latest/tutorial/11_log_custom/
 log: true
 
 # 配置客户端相关
@@ -26,18 +26,33 @@ client:
   #  api - 表示APP端
   # APP端不限ip兼容性好，网页端限制ip地区但效率高
   impl: html
+  
+  # async_impl: 指定异步客户端的底层实现类 (目前仅有: async_api)
+  # 注意: 配置此项不会自动开启异步下载，你必须在代码中调用 _async 相关方法
+  async_impl: async_api
 
-  # domain: 域名配置，默认是 []，表示运行时自动获取域名。
-  # 可配置特定域名，如下：
-  # 程序会先用第一个域名，如果第一个域名重试n次失败，则换下一个域名重试，以此类推。
+  # domain: 禁漫域名配置，一般无需配置，jmcomic会根据上面的impl自动设置相应域名
+  # 该配置项需要和上面的impl结合使用，因为禁漫网页端和APP端使用的是不同域名，
+  # 所以配置是一个dict结构，key是impl的值，value是域名列表，表示这个impl走这些域名。
+  # 域名列表的使用顺序是：先用第一个域名，如果第一个域名重试n次失败，则换下一个域名重试，以此类推。
+  # 下面是示例：（注意下面这些域名可能会过时，不一定能用）
   domain:
-    - jm-comic.org
-    - jm-comic2.cc
-    - 18comic.vip
-    - 18comic.org
+    html:
+      - 18comic.vip
+      - 18comic.org
+    api:
+      - www.jmapiproxyxxx.vip
 
   # retry_times: 请求失败重试次数，默认为5
   retry_times: 5
+
+  # cache: 是否开启客户端级别的缓存，用于缓存已经请求过的元数据（如本子详情、搜索结果等），减少重复网络请求。
+  # 支持以下几种配置值（详见 CacheRegistry 类）：
+  #   - null 或 false (默认值): 关闭缓存，每次请求都重新发起。
+  #   - true 或 level_option: 开启 option 级别缓存，同一个 option 派生的所有 client 共享同一份缓存。
+  #   - level_client: 开启 client 级别缓存，每个 client 维持各自独立的缓存字典，互不干扰。
+  cache: null
+
 
   # postman: 请求配置
   postman:
@@ -93,15 +108,36 @@ dir_rule:
   # 写法:
   # 1. 以'Bd'开头，表示根目录
   # 2. 文件夹每增加一层，使用 '_' 或者 '/' 区隔
-  # 3. 用Pxxx或者Ayyy指代文件夹名，意思是 JmPhotoDetail.xxx / JmAlbumDetail的.yyy。xxx和yyy可以写什么需要看源码。
+  # 3. 用Pxxx或者Ayyy指代文件夹名，意思是 JmPhotoDetail.xxx / JmAlbumDetail的.yyy。
+  # xxx和yyy可以写什么需要看源码，或通过下面代码打印出所有可用的值
+  # 
+  # ```python
+  # import jmcomic
+  # properties: dict = jmcomic.JmOption.default().new_jm_client().get_album_detail(本子id).get_properties_dict()
+  # print(properties)
+  # ```
   # 
   # 下面演示如果要使用禁漫网站的默认下载方式，该怎么写:
   # 规则: 根目录 / 本子id / 章节序号 / 图片文件
   # rule: 'Bd  / Aid   / Pindex'
   # rule: 'Bd_Aid_Pindex'
-
   # 默认规则是: 根目录 / 章节标题 / 图片文件
-  rule: Bd_Ptitle
+  rule: Bd / Ptitle
+  # jmcomic v2.5.36 以后，支持使用python的f-string的语法组合文件夹名，下为示例
+  # rule: Bd / Aauthor / (JM{Aid}-{Pindex})-{Pname}
+  # {}大括号里的内容同样是写 Axxx 或 Pxxx，其他语法自行参考python f-string的语法
+  # 另外，rule开头的Bd可忽略不写，因为程序会自动插入Bd
+
+  # normalize_zh: 可选。控制是否对目录/文件名中的中文进行繁简体规范化。
+  #   - None（默认）：不做任何转换，保持历史行为
+  #   - zh-cn：将中文文本规范为简体
+  #   - zh-tw：将中文文本规范为繁体
+  # 该功能依赖可选库 `zhconv`（非必需），若未安装或转换失败，程序会回退到原字符串并继续工作，不会影响下载流程。
+  # 示例：
+  # dir_rule:
+  #   base_dir: D:/a/b/c/
+  #   rule: Bd / Ptitle
+  #   normalize_zh: zh-cn
 ```
 
 ## 3. option插件配置项
@@ -113,6 +149,7 @@ dir_rule:
 plugins:
   after_init:
     - plugin: usage_log # 实时打印硬件占用率的插件
+      # log: false # 选填。所有的插件都可以配置 `log: false` 以关闭该插件执行时产生的日志输出，默认是 true
       kwargs:
         interval: 0.5 # 间隔时间
         enable_warning: true # 占用过大时发出预警
@@ -130,7 +167,13 @@ plugins:
       kwargs:
         allowed_orig_suffix: # 后缀列表，表示只想下载以.gif结尾的图片
           - .gif
-
+    - plugin: replace_path_string # 字符串替换插件，直接对下载文件夹的路径进行文本替换
+      kwargs:
+        replace: 
+          # {左边写你要替换的原文}: {右边写替换成什么文本}
+          aaa: bbb
+          kyockcho: きょくちょ
+          
     - plugin: client_proxy # 客户端实现类代理插件，不建议非开发人员使用
       kwargs:
         proxy_client_key: photo_concurrent_fetcher_proxy # 代理类的client_key
@@ -175,20 +218,59 @@ plugins:
         album_photo_dict:
           324930: 424507
 
-  after_album:
+  before_album:
+    - plugin: download_cover # 额外下载本子封面的插件
+      kwargs:
+        size: '_3x4' # 可选项，禁漫搜索页的封面图尺寸是 4x3，和详情页不一样，想下搜索页的封面就设置此项
+        dir_rule: # 封面图存放路径规则，写法同上
+          base_dir: D:/a/b/c/
+          rule: '{Atitle}/{Aid}_cover.jpg'
+    
+
+  after_album: # 钩子（插件被调用时机）
     - plugin: zip # 压缩文件插件
       kwargs:
-        level: photo # 按照章节，一个章节一个压缩文件
-        # level 也可以配成 album，表示一个本子对应一个压缩文件，该压缩文件会包含这个本子的所有章节
-
-        filename_rule: Ptitle # 压缩文件的命名规则
-        # 请注意⚠ [https://github.com/hect0x7/JMComic-Crawler-Python/issues/223#issuecomment-2045227527]
-        # filename_rule和level有对应关系
-        # 如果level=[photo], filename_rule只能写Pxxx
-        # 如果level=[album], filename_rule只能写Axxx
+        # 压缩文件插件，配在不同钩子下面，效果不一样。可以选择配在 after_album 或者 after_photo 下
+        #   配置在 after_album 下 → 整个本子合并为一个压缩文件
+        #   配置在 after_photo 下 → 每个章节各一个压缩文件
+        # （旧的 level 配置已废弃，如果你配置过level，比如level=photo, 请直接改用after_photo）
 
         zip_dir: D:/jmcomic/zip/ # 压缩文件存放的文件夹
+        suffix: zip #压缩包后缀名，默认值为zip，可以指定为zip或者7z
+        filename_rule: Atitle # 压缩文件的命名规则
+        # 请注意⚠ [https://github.com/hect0x7/JMComic-Crawler-Python/issues/223#issuecomment-2045227527]
+        # filename_rule和所在钩子有对应关系
+        # 如果配置在 after_photo 下, filename_rule 可以写 Pxxx 和Axxx
+        # 如果配置在 after_album 下, filename_rule 只能写 Axxx，不能写 Pxxx
+
+        # zip插件也支持dir_rule配置项，可以替代旧版本的zip_dir和filename_rule
+        # 请注意⚠ 使用此配置项会使filename_rule，zip_dir，suffix三个配置项无效，与这三个配置项同时存在时仅会使用dir_rule
+        # 示例如下:
+        # dir_rule: # 新配置项，可取代旧的zip_dir和filename_rule
+        #   base_dir: D:/jmcomic-download/
+        #   rule: 'Bd / zip / JM{Aid}-{Atitle}.zip'  # 设置压缩文件夹规则，Bd指代base_dir，中间zip表示在{base_dir}下创建一个名为zip的文件夹，JM{Aid}-{Atitle}.zip 表示压缩文件的命名规则(需显式写出后缀名)
+
         delete_original_file: true # 压缩成功后，删除所有原文件和文件夹
+        
+        # 在v2.6.0及以后版本，zip插件还支持设置密码和加密方式，使用encrypt配置项，该配置是可选的，示例如下：
+        # 1. 给压缩包设置一个指定密码
+        # encrypt:
+        #   password: 123456
+        # 2. 设置随机生成的密码。该密码会在日志中打印出来，并附着到zip的压缩文件注释里
+        # encrypt:
+        #   type: random
+        # 配置密码时，type和password二选一必填
+        
+        # 插件还支持使用7z加密，这种方式会加密压缩包文件头，只有输入了密码才能查看压缩包文件列表，隐私性最好。
+        # 使用encrypt.impl配置项开启7z格式加密，如果不配置，默认仍使用zip格式。
+        # 使用7z格式时记得把压缩包后缀名指定为7z。
+        # 示例如下:
+        # suffix: 7z
+        # encrypt:
+        #   impl: 7z
+        #   type: random # type和password二选一必填，和上面一样
+        # 需要提醒的是，7z没有压缩文件注释，因此如果设置随机密码，密码就只会存在于日志中，请注意及时保存密码。
+         
     
     # 删除重复文件插件
     # 参考 → [https://github.com/hect0x7/JMComic-Crawler-Python/issues/244]
@@ -228,21 +310,23 @@ plugins:
     - plugin: img2pdf
       kwargs:
         pdf_dir: D:/pdf/ # pdf存放文件夹
-        filename_rule: Pid # pdf命名规则
+        filename_rule: Pid # pdf命名规则，P代表photo, id代表使用photo.id也就是章节id
+        encrypt: # pdf密码，可选配置项
+          password: 123 # 密码
   
-    # 请注意⚠
-    # 下方的j2p插件的功能不如img2pdf插件，不建议使用。
-    # 如有图片转pdf的需求，直接使用img2pdf即可，下面的内容请忽略。
-
-    - plugin: j2p # 图片合并插件，可以将下载下来的jpg图片合成为一个pdf插件
-      # 请注意⚠ 该插件的使用前提是，下载下来的图片是jpg图片
-      # 因此，使用该插件前，需要有如下配置:（下载图片格式转为jpg，上文有解释过此配置）
-      # download:
-      #   image:
-      #     suffix: .jpg
+    # img2pdf也支持合并整个本子，把上方的after_photo改为after_album即可。
+    # https://github.com/hect0x7/JMComic-Crawler-Python/discussions/258
+    # 配置到after_album时，需要修改filename_rule参数，不能写Pxx只能写Axx示例如下
+    - plugin: img2pdf
       kwargs:
         pdf_dir: D:/pdf/ # pdf存放文件夹
-        filename_rule: Pid # pdf命名规则
-        quality: 100 # pdf质量，0 - 100
+        filename_rule: Aname # pdf命名规则，A代表album, name代表使用album.name也就是本子名称
+  
+    # 插件来源：https://github.com/hect0x7/JMComic-Crawler-Python/pull/294
+    # long_img插件是把所有图片合并为一个png长图，效果和img2pdf类似
+    - plugin: long_img
+      kwargs:
+        img_dir: D:/pdf/ # 长图存放文件夹
+        filename_rule: Aname # 长图命名规则，同上
   
 ```
